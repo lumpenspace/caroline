@@ -1,70 +1,78 @@
-from neomodel import StructuredNode, StringProperty, StructuredRel, IntegerProperty, RelationshipTo, DateProperty, cardinality
+from neomodel import StructuredNode, StringProperty, IntegerProperty, RelationshipTo, DateProperty, cardinality
 from typing import List
 from loguru import logger
-import openai
 import tiktoken
-from .neo4vec import FloatVectorProperty
+from .neo4vec import  ContentMixin, SimilarityRel, ContentSection, get_embedding
 
-class ContentSection(StructuredRel):
-    index = IntegerProperty(required=True)
+class TrainingExample(StructuredNode, ContentMixin):
+    pass
 
-class Content(StructuredNode):
+class Section(StructuredNode, ContentMixin):
+    index_name = "blog_post_sections"
+
+class Exchange(StructuredNode):
+    question = StringProperty(required=True)
+    answer = StringProperty(required=True)
     content = StringProperty(required=True)
-    embedding = FloatVectorProperty(length=1536)
-    published_at = DateProperty()
+    similar_sections = RelationshipTo('Section', 'HAS_SIMILAR_SECTION', cardinality=cardinality.OneOrMore, model=SimilarityRel)
 
-    def before_save(self):
-        response = openai.Embedding.create(model="text-embedding-ada-002", input=self.content)
-        self.embedding = response['data'][0]['embedding']
+    def pre_save(self):
+        self.content = f"Q: {self.question.strip()}\n\nA: {self.answer.strip()}"
 
-
-class TrainingExample(Content):
-    pass
-
-
-class Section(Content):
-    pass
+    def post_create(self):
+        logger.info(f"Creating exchange for question: {self.question}")
+        similar = Section.get_similar(f"Q: {self.question}\n\nA: {self.answer}")
+        for section in similar:
+            print(section)
 
 class SourceInterview(StructuredNode):
     title = StringProperty(unique_index=True)
-    training_examples = RelationshipTo('TrainingExample', 'HAS_TRAINING_EXAMPLE', cardinality=cardinality.OneOrMore)
+    url = StringProperty(unique_index=True)
 
-    def add_section(self, content: str, index: int):
-        section = Section(content, index).save()
-        self.sections.connect(section)
+    exchanges = RelationshipTo('Exchange', 'HAS_EXCHANGE', cardinality=cardinality.OneOrMore)
+
+    def add_exchanges(self, exchanges: List[Exchange]):
+        for exchange in exchanges:
+            embedding = get_embedding(f"Q: {exchange.question}\n\nA: {exchange.answer}")
+            similar = Section.get_similar(embedding)
+            print(similar)
+        
 
 class Blog(StructuredNode):
     title = StringProperty(unique_index=True)
     base_url = StringProperty(unique_index=True)
-    posts = RelationshipTo('BlogPost', 'HAS_POST', cardinality=cardinality.OneOrMore)
+    posts = RelationshipTo('BlogPost', 'HAS_POST', cardinality=cardinality.ZeroOrMore)
 
 
 class BlogPost(StructuredNode):
     title = StringProperty(unique_index=True)
     author = StringProperty()
-    sections = RelationshipTo('Section', 'HAS_SECTION', cardinality=cardinality.OneOrMore, model=ContentSection)
+    sections = RelationshipTo('Section', 'HAS_SECTION', cardinality=cardinality.ZeroOrMore, model=ContentSection)
     full_text = StringProperty()
+    url = StringProperty(unique_index=True)
 
     def post_save(self):
+        if (self.sections.all()):
+            print("Sections already exist for this blog post")
+            return
         tokenizer = tiktoken.get_encoding("cl100k_base")
         paragraphs = self.full_text.split('\n')
-        current_content = ''
+        section = ""
         sections = []
-        logger.info(f"Splitting {self.title} into sections")
         for index, paragraph in enumerate(paragraphs):
-            tokens = list(tokenizer.encode(paragraph))
+            tokens = list(tokenizer.encode(section + paragraph))
             if len(tokens) > 4096:
-                sections.push(current_content)
-                current_content = ''
+                sections.append(section)
+                section = paragraph
             else:
-                current_content += paragraph
-        if current_content:
-            sections.append(current_content)
+                section += paragraph
+            if index == len(paragraphs) - 1:
+                sections.append(section)
         for index, section in enumerate(sections):
             section = Section(content=section).save()
-            self.sections.connect(section, {"index": index})
-            logger.success(f"Split {self.title} into {len(sections)} sections")
-        logger.success(f"Saved {self.title} to database")
+            self.sections.connect(section, {'index': index})
+            logger.info(f"Created section {index} for blog post {self.title}")
+
     @staticmethod
     def _split_paragraph(tokens: List[str]) -> List[List[str]]:
         return [tokens[i:i + 4096] for i in range(0, len(tokens), 4096)]

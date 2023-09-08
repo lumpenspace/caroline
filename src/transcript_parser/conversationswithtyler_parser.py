@@ -1,7 +1,8 @@
 from bs4 import BeautifulSoup
+from . import ParsedExchange
 from typing import List, Dict
 
-def extract_transcript(html: str) -> List[Dict[str, str]]:
+def conversationswithtyler_parser(html: str) -> List[Dict[str, str]]:
     soup = BeautifulSoup(html, 'html.parser')
     transcript = []
     current_speaker = None
@@ -12,7 +13,7 @@ def extract_transcript(html: str) -> List[Dict[str, str]]:
             # New speaker
             if current_speaker:
                 # Save the previous speaker's text
-                transcript.append({'q': current_speaker, 'a': current_text.strip()})
+                transcript.append(ParsedExchange(current_speaker, current_text.strip()))
             current_speaker = p.strong.text.strip()
             current_text = p.text[len(current_speaker):].strip()
         elif p.strong:

@@ -5,7 +5,6 @@ name = "pypi"
 
 [packages]
 neomodel = "*"
-openai = "*"
 python-dotenv = "*"
 nltk = "*"
 feedparser = "*"
@@ -13,6 +12,7 @@ loguru = "*"
 beautifulsoup4 = "*"
 requests = "*"
 tiktoken = "*"
+openai = {extras = ["datalib"], version = "*"}
 
 [dev-packages]
 
